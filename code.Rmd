@@ -1,0 +1,382 @@
+---
+title: 'Creating Species Habitability Maps'
+author: "Kat Le"
+date: "2022-11-16"
+output:
+    html_document:
+      print_df: paged
+      toc: yes
+      toc_depth: 4
+      toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+getwd()
+```
+
+## Overview
+
+Marine aquaculture has the potential to play an important role in the global food supply as a more sustainable protein option than land-based meat production.[^1] [Gentry et al.](https://www.nature.com/articles/s41559-017-0257-9) mapped the potential for marine aquaculture globally based on multiple constraints, including ship traffic, dissolved oxygen, bottom depth .[^2]
+
+[^1]: Hall, S. J., Delaporte, A., Phillips, M. J., Beveridge, M. & O'Keefe, M. Blue Frontiers: Managing the Environmental Costs of Aquaculture (The WorldFish Center, Penang, Malaysia, 2011).
+
+[^2]: Gentry, R. R., Froehlich, H. E., Grimm, D., Kareiva, P., Parke, M., Rust, M., Gaines, S. D., & Halpern, B. S. Mapping the global potential for marine aquaculture. *Nature Ecology & Evolution*, 1, 1317-1324 (2017).
+
+For this assignment, you are tasked with determining which Exclusive Economic Zones (EEZ) on the West Coast of the US are best suited to developing marine aquaculture for several species of oysters.\
+
+Based on previous research, we know that oysters needs the following conditions for optimal growth:\
+
+-   sea surface temperature: 11-30°C\
+-   depth: 0-70 meters below sea level
+
+##### Learning objectives:
+
+-   combining vector/raster data\
+-   resampling raster data\
+-   masking raster data\
+-   map algebra\
+
+### Data
+
+#### Sea Surface Temperature
+
+We will use average annual sea surface temperature (SST) from the years 2008 to 2012 to characterize the average sea surface temperature within the region. The data we are working with was originally generated from [NOAA's 5km Daily Global Satellite Sea Surface Temperature Anomaly v3.1](https://coralreefwatch.noaa.gov/product/5km/index_5km_ssta.php).
+
+#### Bathymetry
+
+To characterize the depth of the ocean we will use the [General Bathymetric Chart of the Oceans (GEBCO)](https://www.gebco.net/data_and_products/gridded_bathymetry_data/#area).[^3]
+
+[^3]: GEBCO Compilation Group (2022) GEBCO_2022 Grid (<doi:10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c>).
+
+#### Exclusive Economic Zones
+
+We will be designating maritime boundaries using Exclusive Economic Zones off of the west coast of US from [Marineregions.org](https://www.marineregions.org/eez.php).
+
+## Assignment
+
+Below is an outline of the steps you should consider taking to achieve the assignment tasks.
+
+#### Prepare data (5 points)
+
+To start, we need to load all necessary data and make sure it has the coordinate reference system.
+
+-   load necessary packages and set path 
+    -   I recommend using the [`here` package](https://here.r-lib.org/)
+-   read in the shapefile for the West Coast EEZ (`wc_regions_clean.shp`)\
+-   read in SST rasters
+    -   `average_annual_sst_2008.tif`\
+    -   `average_annual_sst_2009.tif`\
+    -   `average_annual_sst_2010.tif`\
+    -   `average_annual_sst_2011.tif`\
+    -   `average_annual_sst_2012.tif`\
+-   combine SST rasters into a raster stack\
+-   read in bathymetry raster (`depth.tif`)\
+-   check that data are in the same coordinate reference system\
+    -   reproject any data not in the same projection
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results = FALSE}
+library(here)
+library(tidyverse)
+library(terra)
+library(sf)
+library(patchwork)
+```
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results = FALSE}
+# read in west coast eez shapefile
+wc_eez <- st_read(here("data", "wc_regions_clean.shp"))
+
+# create list of files
+sst_list <- list.files(here("data/"), pattern = "average*", full.names = TRUE)
+
+# read in landsat data from 2008-2012 as a raster stack and project it into 4326 
+all_sst <- rast(here(sst_list)) %>% 
+  project("EPSG:4326")
+
+# clean column names
+names(all_sst) = c("SST_2008", "SST_2009", "SST_2010", "SST_2011", "SST_2012")
+
+# read in bathymetry data
+bathymetry <- rast(here("data/depth.tif"))
+
+```
+
+```{r}
+# TEST: checking to see if all CRS's match
+if (all(st_crs(wc_eez) == st_crs(all_sst), 
+        st_crs(all_sst) == st_crs(bathymetry))) {
+  print("TRUE - CRS of wc_eez, all_sst, and bathymetry all match")
+} else {
+  print("CHECK EACH CRS")
+}
+```
+
+#### Process data (10 points)
+
+Next, we need process the SST and depth data so that they can be combined. In this case the SST and depth data have slightly different resolutions, extents, and positions. We don't want to change the underlying depth data, so we will need to resample to match the SST data using the nearest neighbor approach.
+
+-   find the mean SST from 2008-2012\
+-   convert SST data from Kelvin to Celsius\
+    -   hint: subtract by 273.15\
+-   crop depth raster to match the extent of the SST raster\
+-   note: the resolutions of the SST and depth data do not match\
+    -   resample the NPP data to match the resolution of the SST data using the nearest neighbor approach\
+-   check that the depth and SST match in resolution, extent, and coordinate reference system\
+    -   hint: can the rasters be stacked?
+
+```{r include=TRUE}
+# find the mean sst from 2008-2012 then convert from kelvin to celsius
+mean_sst_celsius <- terra::app(all_sst, mean) - 273.15
+
+# crop bathymetry data to include area covered in mean_sst_celsius
+bathymetry_cropped <- terra::crop(bathymetry, mean_sst_celsius)
+
+# resample depth data to match resolution of all_sst using nearest neighbors approach
+bathymetry_cropped <- terra::resample(bathymetry_cropped, mean_sst_celsius, method = 'near')
+
+# TEST: checking to see if extent, resolution and crs of mean_sst_celsius and bathymetry match
+if (all((ext(mean_sst_celsius) == ext(bathymetry_cropped)),
+        (resolution(mean_sst_celsius) == resolution(bathymetry_cropped)),
+        (crs(mean_sst_celsius) == crs(bathymetry_cropped)))) {
+  print("TRUE - extent, resolution and crs of mean_sst_celsius and bathymetry match")
+} else {
+  print("CHECK THE EXTENT, RESOLUTION, OR CRS of mean_sst_celsius and bathymetry_cropped")
+}
+
+# create a raster stack of bathymetry_cropped and mean_sst_celsius
+all_sst_bathymetry <- c(bathymetry_cropped, mean_sst_celsius)
+
+```
+
+#### Find suitable locations (20)
+
+In order to find suitable locations for marine aquaculture, we'll need to find locations that are suitable in terms of both SST and depth.
+
+-   reclassify SST and depth data into locations that are suitable for oyster\*\
+    -   hint: set suitable values to `1` and unsuitable values to `NA`\
+-   find locations that satisfy both SST and depth conditions\
+    -   hint: create an overlay using the `lapp()` function multiplying cell values\
+
+```{r include=TRUE}
+##### sst reclassification
+# create reclassification matrix that assigns 1 to suitable values and NA to unsuitable values
+temp_rcl <- matrix(c(-Inf, 11, NA,
+                      11, 30, 1,
+                      30 , Inf, NA), 
+               ncol = 3, byrow = TRUE)
+
+# re-classify mean_sst with matrix above
+mean_sst_reclassified <- classify(mean_sst_celsius, rcl = temp_rcl)
+
+##### depth reclassification
+# create reclassification matrix for bathymetry data
+depth_rcl <- matrix(c(-Inf, -70, NA,
+                      -70, 0, 1,
+                       0, Inf, NA), 
+               ncol = 3, byrow = TRUE)
+
+# re-classify bathymetry_cropped with matrix above
+depth_reclassified <- classify(bathymetry_cropped, rcl = depth_rcl)
+
+
+# TEST: checking to see if extent, resolution and crs of mean_sst_reclassified and depth_reclassified
+if (all((ext(mean_sst_reclassified) == ext(depth_reclassified)),
+        (resolution(mean_sst_reclassified) == resolution(depth_reclassified)),
+        (crs(mean_sst_reclassified) == crs(depth_reclassified)))) {
+  print("TRUE - extent, resolution and crs of mean_sst_reclassified and depth_reclassified match")
+} else {
+  print("CHECK THE EXTENT, RESOLUTION, OR CRS OF mean_sst_celsius AND bathymetry_cropped")
+}
+
+```
+
+```{r inclue = TRUE}
+# create a function to return 1 where mean_sst_reclassified and depth_reclassified are both in suitable conditions
+suitability_fun <- function(sst, depth) {
+  return(sst*depth)
+  }
+
+# apply function to oyster suitability raster stack
+oyster_suitability <- lapp(c(mean_sst_reclassified, depth_reclassified), fun = suitability_fun)
+```
+
+#### Determine the most suitable EEZ (20 points)
+
+We want to determine the total suitable area within each EEZ in order to rank zones by priority. To do so, we need to find the total area of suitable locations within each EEZ.
+
+-   select suitable cells within West Coast EEZs\
+-   find area of grid cells\
+-   find the total suitable area within each EEZ\
+    -   hint: it might be helpful to rasterize the EEZ data\
+-   find the percentage of each zone that is suitable\
+    -   hint it might be helpful to join the suitable area by region onto the EEZ vector data\
+
+```{r include=TRUE}
+# rasterize wc_eez
+wc_rasterized <- rasterize(wc_eez, oyster_suitability, field = 'rgn')
+
+# compute total suitable area
+total_suitable_area <- terra::expanse(oyster_suitability, 
+                                           unit = "km",
+                                           zone = wc_rasterized,
+                                           transform = TRUE)
+
+# find percent suitable area
+percentage_suitable_area <- left_join(wc_eez, total_suitable_area, 
+                                      by = c("rgn" = "zone")) %>% 
+  mutate(percent_suitable_area = (area / area_km2) * 100)
+```
+
+#### Visualize results (5 points)
+
+Now that we have results, we need to present them!
+
+Create the following maps:
+
+-   total suitable area by region\
+-   percent suitable area by region\
+
+Include:
+
+-   legible legends\
+-   updated color aesthetics\
+-   basemap\
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results = FALSE}
+# load in us state boundaries for aesthetics
+us_states <- st_read(here("data/US_State_Boundaries/US_State_Boundaries.shp")) %>% 
+  st_transform(crs = st_crs(percentage_suitable_area)) %>% 
+  filter(STATE_ABBR %in% c("CA", "OR", "WA", "NV", "ID", "AZ", "MT", "UT", "WY", "CO", "NM"))
+
+# create total area suitability map
+total_suitability_map <- ggplot() +
+  geom_sf(data = percentage_suitable_area, aes(fill = area)) +
+  geom_sf(data = us_states, fill = "lightgrey") +
+  geom_sf_text(data = st_centroid(us_states), aes(label = STATE_ABBR), 
+              size = 3, color = "black") +
+  theme_linedraw() +
+  scale_fill_gradientn(colours = c("#ebffe4", "#afe09d", "#689d55")) +
+  labs(title = "Total Suitable Area for Oyster Aquaculture",
+       subtitle = "Organized by West Coast EEZ Regions",
+       fill = bquote("Total Suitable Area (km"^{2}~")"),
+       x = "Longitude",
+       y = "Latitude")
+total_suitability_map
+```
+
+```{r include = TRUE, warning=FALSE}
+# create percent suitability map
+percent_suitability_map <- ggplot() +
+  geom_sf(data = percentage_suitable_area, aes(fill = percent_suitable_area)) +
+    geom_sf_text(data = st_centroid(percentage_suitable_area), 
+               aes(label = round(percent_suitable_area, 2)), 
+              size = 3, color = "black") +
+  geom_sf(data = us_states, fill = "lightgrey") +
+  geom_sf_text(data = st_centroid(us_states), aes(label = STATE_ABBR), 
+            size = 3, color = "black") +
+  theme_linedraw() +
+  scale_fill_gradientn(colours = c("#ebffe4", "#afe09d", "#689d55")) +
+  labs(title = "Percent Suitable Area for Oyster Aquaculture",
+       subtitle = "Organized by West Coast EEZ Regions",
+       fill = "Percent Suitable Area (%)",
+       x = "Longitude",
+       y = "Latitude")
+percent_suitability_map
+```
+
+#### Broaden your workflow! (40 points)
+
+Now that you've worked through the solution for one group of species, let's update your workflow to work for other species. Please create a function that would allow you to reproduce your results for other species. Your function should be able to do the following:\
+
+-   accept temperature and depth ranges and species name as inputs\
+-   create maps of total suitable area and percent suitable area per EEZ with the species name in the title\
+
+Run your function for a species of your choice! You can find information on species depth and temperature requirements on [SeaLifeBase](https://www.sealifebase.ca/search.php). Remember, we are thinking about the potential for marine aquaculture, so these species should have some reasonable potential for commercial consumption.
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results = FALSE}
+# creating function to apply to different species 
+species_suitability <- function(species, temp_min, temp_max, depth_min, depth_max) {
+
+# create reclassification matrix that assigns 1 to suitable values and NA to unsuitable values
+temp_rcl <- matrix(c(-Inf, temp_min, NA,
+                      temp_min, temp_max, 1,
+                      temp_max , Inf, NA), 
+               ncol = 3, byrow = TRUE)
+
+# re-classify mean_sst with matrix above
+mean_sst_reclassified <- classify(mean_sst_celsius, rcl = temp_rcl)
+
+# create reclassification matrix for bathymetry data
+depth_rcl <- matrix(c(-Inf, depth_min, NA,
+                      depth_min, depth_max, 1,
+                      depth_max, Inf, NA), 
+               ncol = 3, byrow = TRUE)
+
+# re-classify bathymetry_cropped with matrix above
+depth_reclassified <- classify(bathymetry_cropped, rcl = depth_rcl)
+
+# create a function to return 1 where mean_sst_reclassified and depth_reclassified are both in suitable conditions
+suitability_fun <- function(sst, depth) {
+  return(sst*depth)
+  }
+
+# apply function to species suitability raster stack
+suitability <- lapp(c(mean_sst_reclassified, depth_reclassified), fun = suitability_fun)
+
+# rasterize wc_eez
+wc_rasterized <- rasterize(wc_eez, suitability, field = 'rgn')
+
+# compute total suitable area
+total_suitable_area <- terra::expanse(suitability, 
+                                           unit = "km",
+                                           zone = wc_rasterized,
+                                           transform = TRUE)
+
+# find percent suitable area
+percentage_suitable_area <- left_join(wc_eez, total_suitable_area, 
+                                      by = c("rgn" = "zone")) %>% 
+  mutate(percent_suitable_area = (area / area_km2) * 100)
+
+# create total area suitability map
+total_suitability_map <- ggplot() +
+  geom_sf(data = percentage_suitable_area, aes(fill = area)) +
+  geom_sf(data = us_states, fill = "lightgrey") +
+  geom_sf_text(data = st_centroid(us_states), aes(label = STATE_ABBR), 
+            size = 1, color = "black") +
+  theme_linedraw() +
+  scale_fill_gradientn(colours = c("#ebffe4", "#afe09d", "#689d55")) +
+  labs(title = paste("Total Suitable Area for Aquaculture:", species),
+       subtitle = expression(italic("Organized by West Coast EEZ Regions")),
+       fill = bquote("Total Suitable Area (km"^{2}~")"),
+        x = "Longitude",
+       y = "Latitude") +
+  theme(plot.title = element_text(hjust = 0.5, vjust = 1),
+        plot.subtitle = element_text(hjust = 3.25, vjust = 0.5, size = 7),
+        axis.text.x = element_text(angle = 45, vjust = 0.75, hjust = 0.75))
+
+# create percent suitability map
+percent_suitability_map <- ggplot() +
+  geom_sf(data = percentage_suitable_area, aes(fill = percent_suitable_area)) +
+    geom_sf_text(data = st_centroid(percentage_suitable_area), 
+               aes(label = round(percent_suitable_area, 2)), 
+              size = 3, color = "black") +
+  geom_sf(data = us_states, fill = "lightgrey") +
+  geom_sf_text(data = st_centroid(us_states), aes(label = STATE_ABBR), 
+            size = 2, color = "black") +
+  theme_linedraw() +
+  scale_fill_gradientn(colours = c("#ebffe4", "#afe09d", "#689d55")) +
+  labs(fill = "Percent Suitable Area (%)",
+       x = "Longitude",
+       y = "Latitude") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.75, hjust = 0.75))
+
+total_suitability_map / percent_suitability_map
+
+}
+```
+
+```{r include=TRUE, warning=FALSE, message=FALSE, results = FALSE}
+# testing function!
+species_suitability("California Rockfish", temp_min = 12.78, temp_max = 20, depth_min = -3000, depth_max = 0)
+```
