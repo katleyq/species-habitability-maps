@@ -1,5 +1,5 @@
 This project
 
 
-![Species Biodiversity]
-(https://www.researchgate.net/profile/Luca-Boerger/publication/323220562/figure/fig3/AS:632742182141952@1527868900085/Map-showing-the-Biodiversity-Intactness-Index-as-estimated-by-Newbold-et-al-2016a.png)
+![Species_Biodiversity](https://defenders.org/sites/default/files/styles/meta_image/public/2020-05/Photo%20Collage.jpg?itok=m755MgRN)
+Source: Defenders of Wildlife. URL: https://defenders.org/blog/2020/05/international-day-biological-diversity-our-solutions-are-nature
