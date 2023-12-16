@@ -1,8 +1,6 @@
 This project
 
 
-![Species_Biodiversity](https://defenders.org/sites/default/files/styles/meta_image/public/2020-05/Photo%20Collage.jpg?itok=m755MgRN)
+![Marine_Aquaculture](https://blog.dhigroup.com/wp-content/uploads/2017/09/fish-farm.jpg)
 
-Source: Defenders of Wildlife. 
-
-URL: https://defenders.org/blog/2020/05/international-day-biological-diversity-our-solutions-are-nature
+Source URL: https://blog.dhigroup.com/the-secret-to-supporting-sustainable-marine-aquaculture/
